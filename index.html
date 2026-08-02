@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Happy Birthday Aman</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #111; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+
+    /* Controls */
+    .controls { position: fixed; right: 12px; bottom: 12px; z-index: 10; display: flex; gap: 8px; }
+    .btn { cursor: pointer; font: 14px system-ui, sans-serif; padding: 6px 10px; border-radius: 10px; border: 1px solid #444; background:#1d1d1d; color:#eee; opacity:.9 }
+    .btn:hover { opacity: 1 }
+
+    /* Tap-to-start gate */
+    .gate { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.85); color:#fff; z-index: 20; }
+    .gate.hidden { display: none }
+    .gate .card { text-align: center; padding: 20px 24px; border: 1px solid #333; border-radius: 14px; background: #121212; }
+    .gate .card h1 { margin: 0 0 10px; font: 600 18px/1.2 system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <!-- Audio element. The script will set its src after probing common paths. -->
+  <audio id="bgm" preload="auto" loop playsinline></audio>
+
+  <!-- Autoplay gate -->
+  <div id="gate" class="gate hidden" role="dialog" aria-modal="true">
+    <div class="card">
+      <h1>Tap to start the music</h1>
+      <p>Then enjoy the animation.</p>
+      <button id="gateStart" class="btn">Start</button>
+    </div>
+  </div>
+
+  <!-- Tiny control buttons -->
+  <div class="controls">
+    <button id="playPause" class="btn" aria-label="Play or pause music">Play</button>
+    <button id="mute" class="btn" aria-label="Mute or unmute">Unmute</button>
+  </div>
+
+  <script>
+  // ================== Canvas + Animation ==================
+  const c = document.getElementById("c");
+  const ctx = c.getContext("2d", { alpha: false });
+
+  let cssW = window.innerWidth;
+  let cssH = window.innerHeight;
+  let dpr  = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+  function sizeCanvas() {
+    cssW = window.innerWidth;
+    cssH = window.innerHeight;
+    dpr  = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+    c.width  = Math.floor(cssW * dpr);
+    c.height = Math.floor(cssH * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    w = cssW; h = cssH; hw = w/2; hh = h/2;
+    ctx.font = opts.charSize + "px Verdana";
+  }
+  let w = cssW, h = cssH, hw = w/2, hh = h/2;
+
+  const opts = {
+    strings: ["HAPPY", "BIRTHDAY!", "AMAN"],
+    charSize: 44, charSpacing: 44, lineHeight: 56,
+    cx: cssW/2, cy: cssH/2,
+
+    fireworkPrevPoints: 10, fireworkBaseLineWidth: 5, fireworkAddedLineWidth: 8,
+    fireworkSpawnTime: 200, fireworkBaseReachTime: 30, fireworkAddedReachTime: 30,
+    fireworkCircleBaseSize: 20, fireworkCircleAddedSize: 10,
+    fireworkCircleBaseTime: 30, fireworkCircleAddedTime: 30,
+    fireworkCircleFadeBaseTime: 10, fireworkCircleFadeAddedTime: 5,
+    fireworkBaseShards: 5, fireworkAddedShards: 5,
+    fireworkShardPrevPoints: 3, fireworkShardBaseVel: 4, fireworkShardAddedVel: 2,
+    fireworkShardBaseSize: 3, fireworkShardAddedSize: 3,
+    gravity: 0.1, upFlow: -0.1,
+    letterContemplatingWaitTime: 360,
+
+    balloonSpawnTime: 20, balloonBaseInflateTime: 10, balloonAddedInflateTime: 10,
+    balloonBaseSize: 20, balloonAddedSize: 20,
+    balloonBaseVel: 0.4, balloonAddedVel: 0.4,
+    balloonBaseRadian: -(Math.PI/2 - 0.5), balloonAddedRadian: -1
+  };
+
+  const IS_MOBILE = /Mobi|Android/i.test(navigator.userAgent);
+  const speedFactor = IS_MOBILE ? 0.90 : 1.25;
+  (function applySpeed(f) {
+    const timeKeys = [
+      "fireworkSpawnTime","fireworkBaseReachTime","fireworkAddedReachTime",
+      "fireworkCircleBaseTime","fireworkCircleAddedTime",
+      "fireworkCircleFadeBaseTime","fireworkCircleFadeAddedTime",
+      "letterContemplatingWaitTime","balloonSpawnTime","balloonBaseInflateTime","balloonAddedInflateTime"
+    ];
+    timeKeys.forEach(k => opts[k] = Math.max(1, Math.round(opts[k] / f)));
+    const velKeys = ["balloonBaseVel","balloonAddedVel","fireworkShardBaseVel","fireworkShardAddedVel","gravity"];
+    velKeys.forEach(k => opts[k] *= f);
+    opts.upFlow *= f;
+  })(speedFactor);
+
+  const calc = { totalWidth: opts.charSpacing * Math.max(opts.strings[0].length, opts.strings[1].length) };
+  const Tau = Math.PI * 2, TauQuarter = Tau / 4;
+  const letters = [];
+
+  // Image
+  const img = new Image();
+  img.src = "Aman.png"; // update path if needed
+  let sprite = null, imgReady = false, t0 = performance.now();
+  let imgYBase = -210, baseRadius = 95;
+
+  (async () => {
+    try {
+      if (img.decode) await img.decode();
+      const bmp = await createImageBitmap(img);
+      sprite = bmp; imgReady = true; t0 = performance.now();
+    } catch (e) {
+      img.onload = async () => {
+        try { const bmp = await createImageBitmap(img); sprite = bmp; imgReady = true; t0 = performance.now(); }
+        catch { imgReady = true; }
+      };
+      img.onerror = () => { imgReady = false; };
+    }
+  })();
+
+  function Letter(char, x, y) {
+    this.char = char; this.x = x; this.y = y;
+    this.dx = -ctx.measureText(char).width / 2;
+    this.dy = +opts.charSize / 2;
+    this.fireworkDy = this.y - hh;
+    let hue = (x / calc.totalWidth) * 360;
+    this.color = `hsl(${hue},80%,50%)`;
+    this.lightAlphaColor = `hsla(${hue},80%,light%,alp)`;
+    this.lightColor = `hsl(${hue},80%,light%)`;
+    this.alphaColor = `hsla(${hue},80%,50%,alp)`;
+    this.reset();
+  }
+  Letter.prototype.reset = function () {
+    this.phase = "firework"; this.tick = 0; this.spawned = false;
+    this.spawningTime = (opts.fireworkSpawnTime * Math.random()) | 0;
+    this.reachTime = (opts.fireworkBaseReachTime + opts.fireworkAddedReachTime * Math.random()) | 0;
+    this.lineWidth = opts.fireworkBaseLineWidth + opts.fireworkAddedLineWidth * Math.random();
+    this.prevPoints = [[0, hh, 0]];
+  };
+
+  function drawTextGlow(letter, x, y, glowStrength = 12) {
+    ctx.save();
+    ctx.shadowColor = letter.lightAlphaColor.replace("light", 100).replace("alp", 0.45);
+    ctx.shadowBlur = glowStrength;
+    ctx.fillStyle = letter.lightColor.replace("light", 75);
+    ctx.fillText(letter.char, x + letter.dx, y + letter.dy);
+    ctx.restore();
+  }
+
+  Letter.prototype.step = function () {
+    if (this.phase === "firework") {
+      if (!this.spawned) {
+        if (++this.tick >= this.spawningTime) { this.tick = 0; this.spawned = true; }
+      } else {
+        ++this.tick;
+        let p = this.tick / this.reachTime,
+            a = Math.sin(p * TauQuarter),
+            x = p * this.x,
+            y = hh + a * this.fireworkDy;
+
+        if (this.prevPoints.length > opts.fireworkPrevPoints) this.prevPoints.shift();
+        this.prevPoints.push([x, y, p * this.lineWidth]);
+
+        let lwp = 1 / (this.prevPoints.length - 1);
+        for (let i = 1; i < this.prevPoints.length; ++i) {
+          let pt = this.prevPoints[i], pt2 = this.prevPoints[i - 1];
+          ctx.strokeStyle = this.alphaColor.replace("alp", i / this.prevPoints.length);
+          ctx.lineWidth = pt[2] * lwp * i;
+          ctx.beginPath(); ctx.moveTo(pt[0], pt[1]); ctx.lineTo(pt2[0], pt2[1]); ctx.stroke();
+        }
+
+        if (this.tick >= this.reachTime) {
+          this.phase = "contemplate";
+          this.circleFinalSize =
+            opts.fireworkCircleBaseSize + opts.fireworkCircleAddedSize * Math.random();
+          this.circleCompleteTime =
+            (opts.fireworkCircleBaseTime + opts.fireworkCircleAddedTime * Math.random()) | 0;
+          this.circleCreating = true; this.circleFading = false;
+          this.circleFadeTime =
+            (opts.fireworkCircleFadeBaseTime + opts.fireworkCircleFadeAddedTime * Math.random()) | 0;
+          this.tick = 0; this.tick2 = 0;
+
+          this.shards = [];
+          let shardCount = (opts.fireworkBaseShards + opts.fireworkAddedShards * Math.random()) | 0,
+              ang = Tau / shardCount, cos = Math.cos(ang), sin = Math.sin(ang),
+              xx = 1, yy = 0;
+          for (let i = 0; i < shardCount; ++i) {
+            let x1 = xx; xx = xx * cos - yy * sin; yy = yy * cos + x1 * sin;
+            this.shards.push(new Shard(this.x, this.y, xx, yy, this.alphaColor));
+          }
+        }
+      }
+    } else if (this.phase === "contemplate") {
+      ++this.tick;
+      if (this.circleCreating) {
+        ++this.tick2;
+        let p = this.tick2 / this.circleCompleteTime,
+            a = -Math.cos(p * Math.PI) / 2 + 0.5;
+        ctx.beginPath();
+        ctx.fillStyle = this.lightAlphaColor.replace("light", 50 + 50 * p).replace("alp", p);
+        ctx.arc(this.x, this.y, a * this.circleFinalSize, 0, Tau);
+        ctx.fill();
+        if (this.tick2 > this.circleCompleteTime) { this.tick2 = 0; this.circleCreating = false; this.circleFading = true; }
+      } else if (this.circleFading) {
+        drawTextGlow(this, this.x, this.y, 14);
+        ++this.tick2;
+        let p = this.tick2 / this.circleFadeTime,
+            a = -Math.cos(p * Math.PI) / 2 + 0.5;
+        ctx.beginPath();
+        ctx.fillStyle = this.lightAlphaColor.replace("light", 100).replace("alp", 1 - a);
+        ctx.arc(this.x, this.y, this.circleFinalSize, 0, Tau);
+        ctx.fill();
+        if (this.tick2 >= this.circleFadeTime) this.circleFading = false;
+      } else {
+        drawTextGlow(this, this.x, this.y, 12);
+      }
+
+      for (let i = 0; i < this.shards.length; ++i) {
+        this.shards[i].step();
+        if (!this.shards[i].alive) { this.shards.splice(i, 1); --i; }
+      }
+
+      if (this.tick > opts.letterContemplatingWaitTime) {
+        this.phase = "balloon";
+        this.tick = 0; this.spawning = true;
+        this.spawnTime = (opts.balloonSpawnTime * Math.random()) | 0;
+        this.inflating = false;
+        this.inflateTime = (opts.balloonBaseInflateTime + opts.balloonAddedInflateTime * Math.random()) | 0;
+        this.size = (opts.balloonBaseSize + opts.balloonAddedSize * Math.random()) | 0;
+        let rad = opts.balloonBaseRadian + opts.balloonAddedRadian * Math.random(),
+            vel = opts.balloonBaseVel + opts.balloonAddedVel * Math.random();
+        this.vx = Math.cos(rad) * vel; this.vy = Math.sin(rad) * vel;
+      }
+    } else if (this.phase === "balloon") {
+      ctx.strokeStyle = this.lightColor.replace("light", 80);
+      if (this.spawning) {
+        ++this.tick;
+        drawTextGlow(this, this.x, this.y, 12);
+        if (this.tick >= this.spawnTime) { this.tick = 0; this.spawning = false; this.inflating = true; }
+      } else if (this.inflating) {
+        ++this.tick;
+        let p = this.tick / this.inflateTime, x = (this.cx = this.x), y = (this.cy = this.y - this.size * p);
+        ctx.fillStyle = this.alphaColor.replace("alp", p);
+        ctx.beginPath(); generateBalloonPath(x, y, this.size * p); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, this.y); ctx.stroke();
+        drawTextGlow(this, this.x, this.y, 12);
+        if (this.tick >= this.inflateTime) { this.tick = 0; this.inflating = false; }
+      } else {
+        this.cx += this.vx; this.cy += this.vy += opts.upFlow;
+        ctx.fillStyle = this.color;
+        ctx.beginPath(); generateBalloonPath(this.cx, this.cy, this.size); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(this.cx, this.cy); ctx.lineTo(this.cx, this.cy + this.size); ctx.stroke();
+        drawTextGlow(this, this.cx, this.cy + this.size, 12);
+        if (this.cy + this.size < -hh || this.cx < -hw || this.cy > hw) this.phase = "done";
+      }
+    }
+  };
+
+  function Shard(x, y, vx, vy, color) {
+    let vel = opts.fireworkShardBaseVel + opts.fireworkShardAddedVel * Math.random();
+    this.vx = vx * vel; this.vy = vy * vel;
+    this.x = x; this.y = y;
+    this.prevPoints = [[x, y]];
+    this.color = color; this.alive = true;
+    this.size = opts.fireworkShardBaseSize + opts.fireworkShardAddedSize * Math.random();
+  }
+  Shard.prototype.step = function () {
+    this.x += this.vx; this.y += this.vy += opts.gravity;
+    if (this.prevPoints.length > opts.fireworkShardPrevPoints) this.prevPoints.shift();
+    this.prevPoints.push([this.x, this.y]);
+    let lwp = this.size / this.prevPoints.length;
+    for (let k = 0; k < this.prevPoints.length - 1; ++k) {
+      let p = this.prevPoints[k], p2 = this.prevPoints[k + 1];
+      ctx.strokeStyle = this.color.replace("alp", k / this.prevPoints.length);
+      ctx.lineWidth = k * lwp;
+      ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(p2[0], p[1]); ctx.stroke();
+    }
+    if (this.prevPoints[0][1] > hh) this.alive = false;
+  };
+
+  function generateBalloonPath(x, y, size) {
+    ctx.moveTo(x, y);
+    ctx.bezierCurveTo(x - size/2, y - size/2, x - size/4, y - size, x, y - size);
+    ctx.bezierCurveTo(x + size/4, y - size, x + size/2, y - size/2, x, y);
+  }
+
+  function anim() {
+    requestAnimationFrame(anim);
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.save();
+    ctx.translate(hw, hh);
+
+    if (imgReady) {
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+
+      const t = (performance.now() - t0) / 1000;
+      const scalePulse = 1 + 0.04 * Math.sin(t * 2.0);
+      const bobY       = 10 * Math.sin(t * 1.5);
+      const r = baseRadius * scalePulse;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(0, imgYBase + bobY, r, 0, Tau);
+      ctx.closePath();
+      ctx.clip();
+
+      const source = sprite || img;
+      const sw = source.naturalWidth || source.width || 0;
+      const sh = source.naturalHeight || source.height || 0;
+      if (sw && sh) {
+        const side = Math.min(sw, sh);
+        const sx = (sw - side) / 2;
+        const sy = (sh - side) / 2;
+        const d  = r * 2;
+        ctx.drawImage(source, sx, sy, side, side, -r, imgYBase + bobY - r, d, d);
+      }
+      ctx.restore();
+    }
+
+    let done = true;
+    for (let l = 0; l < letters.length; ++l) {
+      letters[l].step();
+      if (letters[l].phase !== "done") done = false;
+    }
+    ctx.restore();
+
+    if (done) for (let l = 0; l < letters.length; ++l) letters[l].reset();
+  }
+
+  function buildLetters() {
+    letters.length = 0;
+    ctx.font = opts.charSize + "px Verdana";
+    for (let i = 0; i < opts.strings.length; ++i) {
+      const row = opts.strings[i];
+      for (let j = 0; j < row.length; ++j) {
+        letters.push(
+          new Letter(
+            row[j],
+            j * opts.charSpacing + opts.charSpacing/2 - (row.length * opts.charSpacing) / 2,
+            i * opts.lineHeight + opts.lineHeight/2 - (opts.strings.length * opts.lineHeight) / 2
+          )
+        );
+      }
+    }
+  }
+
+  sizeCanvas();
+  buildLetters();
+  anim();
+
+  window.addEventListener("resize", () => {
+    sizeCanvas();
+    buildLetters();
+  }, { passive: true });
+
+  // ================== Background Music ==================
+  const audio   = document.getElementById('bgm');
+  const gate    = document.getElementById('gate');
+  const gateBtn = document.getElementById('gateStart');
+  const playBtn = document.getElementById('playPause');
+  const muteBtn = document.getElementById('mute');
+  audio.volume = 0.6;
+
+  // Try these paths in order. Put your real location first.
+  const audioCandidates = [
+    "./hbd.mp3",
+    "./Content/hbd.mp3",
+    "./content/hbd.mp3",
+    "./assets/hbd.mp3"
+  ];
+
+  async function pickAudioSrc() {
+    for (const p of audioCandidates) {
+      try {
+        const url = new URL(p, document.baseURI).href;
+        const res = await fetch(url, { method: "HEAD", cache: "no-store" });
+        if (res.ok) {
+          audio.src = p;
+          console.log("Audio found at:", url);
+          return true;
+        }
+      } catch {}
+    }
+    console.warn("No audio file found at any candidate path.");
+    // Keep first as default to allow manual test
+    audio.src = audioCandidates[0];
+    return false;
+  }
+
+  function updateButtons() {
+    playBtn.textContent = audio.paused ? 'Play' : 'Pause';
+    muteBtn.textContent = audio.muted ? 'Unmute' : 'Mute';
+  }
+
+  async function startMusic() {
+    try {
+      await audio.play();
+      gate.classList.add('hidden');
+    } catch (err) {
+      gate.classList.remove('hidden');
+    }
+    updateButtons();
+  }
+
+  // First interaction unlock
+  ["click","touchstart","keydown"].forEach(ev => {
+    window.addEventListener(ev, () => {
+      if (audio.paused) startMusic();
+    }, { once: true, passive: true });
+  });
+  gateBtn.addEventListener('click', startMusic);
+
+  // Controls
+  playBtn.addEventListener('click', async () => {
+    try { if (audio.paused) { await audio.play(); } else { audio.pause(); } }
+    catch (e) { console.error(e); }
+    updateButtons();
+  });
+  muteBtn.addEventListener('click', () => { audio.muted = !audio.muted; updateButtons(); });
+
+  // Resume when tab becomes active
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && audio.paused) startMusic();
+  });
+
+  // Kick off: pick the correct file, then try autoplay
+  (async () => {
+    const found = await pickAudioSrc();
+    if (!found) {
+      alert("Audio file not found at ./hbd.mp3 or ./Content/hbd.mp3. Check the file name and path.");
+    }
+    try { await startMusic(); } catch {}
+  })();
+  </script>
+</body>
+</html>
